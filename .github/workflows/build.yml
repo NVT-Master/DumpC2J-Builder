@@ -7,12 +7,12 @@ on:
         description: "Custom Kernel Name (LOCALVERSION)"
         required: true
         type: string
-        default: "-DumpC2J"
+        default: "-anykern3-11-DumpC2J"
       spoof_uname:
         description: "Spoof Uname (SUSFS/Stock Naming)"
         required: true
         type: boolean
-        default: false
+        default: true
       clang_variant:
         description: "Clang Toolchain"
         required: true
@@ -43,7 +43,7 @@ on:
           - stock
           - root
           - susfs
-        default: stock
+        default: susfs
       root:
         description: "Root Method"
         required: true
@@ -61,7 +61,7 @@ on:
           - full
           - thin
           - none
-        default: full
+        default: thin
       bypasscharging:
         description: "Bypass Charging (MCA Override)"
         required: true
@@ -128,7 +128,7 @@ jobs:
         run: |
           git clone --depth=50 --filter=blob:none \
             --branch main \
-            https://${{ secrets.GH_TOKEN }}@github.com/adennnqt/DumpC2J-Kernel \
+            https://github.com/adennnqt/DumpC2J-Kernel \
             kernel-source
 
       - name: Parse Inputs
@@ -227,13 +227,6 @@ jobs:
           RUN_MODE: ${{ inputs.run_mode }}
         run: bash builder/scripts/scout.sh
 
-      - name: Setup ccache
-        env:
-          CLANG_VARIANT: ${{ inputs.clang_variant }}
-          LTO: ${{ inputs.lto }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: bash builder/scripts/lib/ccache_setup.sh
-
       - name: Cache LTO Linker Cache
         if: inputs.lto == 'thin'
         uses: actions/cache@v4
@@ -263,18 +256,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           bash builder/scripts/build.sh
-
-      - name: Save ccache (local part)
-        if: always()
-        continue-on-error: true
-        run: bash builder/scripts/lib/ccache_save.sh
-
-      - name: Publish ccache
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: bash builder/scripts/merge_ccache.sh "$CCACHE_ASSET" "$CCACHE_OUT_DIR"
 
       - name: Set LTO Output
         id: lto_output
