@@ -1,4 +1,4 @@
-name: DumpC2J Kernel Builder
+name: NVT Onyx Kernel Builder
 
 on:
   workflow_dispatch:
@@ -7,12 +7,14 @@ on:
         description: "Custom Kernel Name (LOCALVERSION)"
         required: true
         type: string
-        default: "-anykern3-11-DumpC2J"
+        default: "-NVT-Onyx-v1"
+
       spoof_uname:
-        description: "Spoof Uname (SUSFS/Stock Naming)"
+        description: "Spoof Uname"
         required: true
         type: boolean
-        default: true
+        default: false
+
       clang_variant:
         description: "Clang Toolchain"
         required: true
@@ -24,8 +26,9 @@ on:
           - zyc
           - aosp
         default: neutron
+
       hz:
-        description: "Refresh Rate (HZ)"
+        description: "Kernel HZ Profile"
         required: true
         type: choice
         options:
@@ -34,7 +37,8 @@ on:
           - smooth
           - performance
           - ultra-performance
-        default: smooth
+        default: balance
+
       variant:
         description: "Build Variant"
         required: true
@@ -43,7 +47,8 @@ on:
           - stock
           - root
           - susfs
-        default: susfs
+        default: stock
+
       root:
         description: "Root Method"
         required: true
@@ -52,7 +57,8 @@ on:
           - none
           - ksu-next
           - sukisu
-        default: sukisu
+        default: none
+
       lto:
         description: "LTO Mode"
         required: true
@@ -62,38 +68,45 @@ on:
           - thin
           - none
         default: thin
+
       bypasscharging:
         description: "Bypass Charging (MCA Override)"
         required: true
         type: boolean
-        default: true
+        default: false
+
       droidspaces:
         description: "Droidspaces Support"
         required: true
         type: boolean
         default: false
+
       kernel_version_spoof:
-        description: "Spoof Kernel Version (kosongkan = pakai upstream)"
+        description: "Spoof Kernel Version (blank = upstream)"
         required: false
         type: string
         default: ""
+
       debug:
-        description: "Debug Mode (nokaslr, no optimizations)"
+        description: "Debug Mode"
         required: true
         type: boolean
         default: false
+
       nomount:
-        description: "NoMount (VFS Path Injection, no mount table)"
+        description: "NoMount (VFS Path Injection)"
         required: true
         type: boolean
         default: false
+
       kasumi:
-        description: "Kasumi (path hiding/spoofing LKM, manual insmod required)"
+        description: "Kasumi LKM"
         required: true
         type: boolean
         default: false
+
       run_mode:
-        description: "Run Mode (Release=pinned only, Test=check upstream)"
+        description: "Run Mode"
         required: true
         type: choice
         options:
@@ -106,17 +119,40 @@ env:
 
 jobs:
   build:
-    name: "Custom Build"
+    name: "NVT Onyx Kernel Build"
     runs-on: ubuntu-24.04
+
     permissions:
       contents: write
+
     outputs:
       lto_actual: ${{ steps.lto_output.outputs.lto_actual }}
 
     steps:
+
+      # ---------------------------------------------------------
+      # Validate
+      # ---------------------------------------------------------
+
       - name: Validate Input Combination
         run: |
-          echo "[+] Input combination valid: variant=${{ inputs.variant }}, root=${{ inputs.root }}"
+          echo "========================================"
+          echo "NVT Onyx Kernel Builder"
+          echo "========================================"
+          echo "Variant : ${{ inputs.variant }}"
+          echo "Root    : ${{ inputs.root }}"
+          echo "Clang   : ${{ inputs.clang_variant }}"
+          echo "HZ      : ${{ inputs.hz }}"
+          echo "LTO     : ${{ inputs.lto }}"
+          echo "========================================"
+
+          if [ "${{ inputs.variant }}" = "stock" ] && [ "${{ inputs.root }}" != "none" ]; then
+            echo "::warning::Stock variant forces root=none."
+          fi
+
+      # ---------------------------------------------------------
+      # Checkout Builder
+      # ---------------------------------------------------------
 
       - name: Checkout Builder
         uses: actions/checkout@v4
@@ -124,12 +160,22 @@ jobs:
           path: builder
           fetch-depth: 0
 
+      # ---------------------------------------------------------
+      # Kernel Source
+      # ---------------------------------------------------------
+
       - name: Clone Kernel Source
         run: |
-          git clone --depth=50 --filter=blob:none \
+          git clone \
+            --depth=50 \
+            --filter=blob:none \
             --branch main \
             https://github.com/adennnqt/DumpC2J-Kernel \
             kernel-source
+
+      # ---------------------------------------------------------
+      # Parse Inputs
+      # ---------------------------------------------------------
 
       - name: Parse Inputs
         id: setup_vars
@@ -137,71 +183,178 @@ jobs:
           INPUT_HZ: ${{ inputs.hz }}
           INPUT_VARIANT: ${{ inputs.variant }}
           INPUT_ROOT: ${{ inputs.root }}
+
+          # Daily-driver baseline:
+          # exploit / bypass flags OFF
           INPUT_HARDENED: "off"
+          INPUT_HTSR: "off"
+          INPUT_WIFI: "off"
+          INPUT_KGSL: "off"
+          INPUT_DATA: "off"
+
           INPUT_BYPASS: ${{ inputs.bypasscharging && 'on' || 'off' }}
           INPUT_DROIDSPACES: ${{ inputs.droidspaces && 'on' || 'off' }}
-          INPUT_HTSR: "on"
-          INPUT_WIFI: "on"
-          INPUT_KGSL: "on"
-          INPUT_DATA: "on"
           INPUT_DEBUG: ${{ inputs.debug && 'on' || 'off' }}
           INPUT_KERNEL_NAME: ${{ inputs.kernel_name }}
           INPUT_SPOOF_UNAME: ${{ inputs.spoof_uname && 'on' || 'off' }}
           INPUT_NOMOUNT: ${{ inputs.nomount && 'on' || 'off' }}
-        run: |
-          if [ "$INPUT_HZ" == "powersave" ]; then HZ_ID=100
-          elif [ "$INPUT_HZ" == "balance" ]; then HZ_ID=250
-          elif [ "$INPUT_HZ" == "performance" ]; then HZ_ID=500
-          elif [ "$INPUT_HZ" == "smooth" ]; then HZ_ID=300
-          elif [ "$INPUT_HZ" == "ultra-performance" ]; then HZ_ID=1000
-          fi
-          echo "HZ_ID=$HZ_ID" >> $GITHUB_ENV
 
+        run: |
+
+          # HZ mapping
+          case "$INPUT_HZ" in
+            powersave)
+              HZ_ID=100
+              ;;
+            balance)
+              HZ_ID=250
+              ;;
+            smooth)
+              HZ_ID=300
+              ;;
+            performance)
+              HZ_ID=500
+              ;;
+            ultra-performance)
+              HZ_ID=1000
+              ;;
+            *)
+              echo "Invalid HZ profile: $INPUT_HZ"
+              exit 1
+              ;;
+          esac
+
+          echo "HZ_ID=$HZ_ID" >> "$GITHUB_ENV"
+
+          # Stock always means no root
           ACTUAL_ROOT="$INPUT_ROOT"
-          if [ "$INPUT_VARIANT" == "stock" ]; then
+
+          if [ "$INPUT_VARIANT" = "stock" ]; then
             ACTUAL_ROOT="none"
           fi
-          echo "ACTUAL_ROOT=$ACTUAL_ROOT" >> $GITHUB_ENV
 
-          if [ "$INPUT_VARIANT" == "stock" ]; then
+          echo "ACTUAL_ROOT=$ACTUAL_ROOT" >> "$GITHUB_ENV"
+
+          # Build name
+          if [ "$INPUT_VARIANT" = "stock" ]; then
             BUILD_NAME="${INPUT_VARIANT}-${INPUT_HZ}"
           else
             BUILD_NAME="${INPUT_VARIANT}-${ACTUAL_ROOT}-${INPUT_HZ}"
           fi
 
-          [ "$INPUT_BYPASS" == "on" ] && BUILD_NAME="${BUILD_NAME}-bypasscharging"
-          [ "$INPUT_DROIDSPACES" == "on" ] && BUILD_NAME="${BUILD_NAME}-droidspaces"
-          [ "$INPUT_DEBUG" == "on" ] && BUILD_NAME="${BUILD_NAME}-debug"
-          [ "$INPUT_NOMOUNT" == "on" ] && BUILD_NAME="${BUILD_NAME}-nomount"
+          if [ "$INPUT_BYPASS" = "on" ]; then
+            BUILD_NAME="${BUILD_NAME}-bypasscharging"
+          fi
 
-          echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
+          if [ "$INPUT_DROIDSPACES" = "on" ]; then
+            BUILD_NAME="${BUILD_NAME}-droidspaces"
+          fi
+
+          if [ "$INPUT_DEBUG" = "on" ]; then
+            BUILD_NAME="${BUILD_NAME}-debug"
+          fi
+
+          if [ "$INPUT_NOMOUNT" = "on" ]; then
+            BUILD_NAME="${BUILD_NAME}-nomount"
+          fi
+
+          echo "BUILD_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "========================================"
+          echo "Build Configuration"
+          echo "========================================"
+          echo "Kernel Name : $INPUT_KERNEL_NAME"
+          echo "Variant     : $INPUT_VARIANT"
+          echo "Root        : $ACTUAL_ROOT"
+          echo "Clang       : ${{ inputs.clang_variant }}"
+          echo "HZ          : $HZ_ID"
+          echo "LTO         : ${{ inputs.lto }}"
+          echo "HTSR        : off"
+          echo "WIFI        : off"
+          echo "KGSL        : off"
+          echo "DATA        : off"
+          echo "Bypass      : $INPUT_BYPASS"
+          echo "Droidspaces : $INPUT_DROIDSPACES"
+          echo "Debug       : $INPUT_DEBUG"
+          echo "NoMount     : $INPUT_NOMOUNT"
+          echo "========================================"
+
+      # ---------------------------------------------------------
+      # Swap
+      # ---------------------------------------------------------
 
       - name: Create Swap
         run: |
           SWAPFILE="/mnt/build_swapfile"
+
           while true; do
-            if sudo fallocate -l 10G $SWAPFILE || sudo dd if=/dev/zero of=$SWAPFILE bs=1M count=10240 status=progress; then
+            if sudo fallocate -l 10G "$SWAPFILE" \
+              || sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=10240 status=progress; then
               break
             else
               sleep 5
             fi
           done
-          sudo chmod 600 $SWAPFILE && sudo mkswap $SWAPFILE && sudo swapon $SWAPFILE
+
+          sudo chmod 600 "$SWAPFILE"
+          sudo mkswap "$SWAPFILE"
+          sudo swapon "$SWAPFILE"
+
+          free -h
+
+      # ---------------------------------------------------------
+      # Build Dependencies
+      # ---------------------------------------------------------
 
       - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex \
-            g++-multilib gcc-multilib git gnupg gperf imagemagick \
-            lib32ncurses-dev lib32readline-dev lib32z1-dev libncurses-dev \
-            libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush \
-            rsync schedtool squashfs-tools xsltproc zip zlib1g-dev \
-            python3 clang lld llvm jq
+
+          sudo apt-get install -y \
+            bc \
+            bison \
+            build-essential \
+            ccache \
+            curl \
+            flex \
+            g++-multilib \
+            gcc-multilib \
+            git \
+            gnupg \
+            gperf \
+            imagemagick \
+            lib32ncurses-dev \
+            lib32readline-dev \
+            lib32z1-dev \
+            libncurses-dev \
+            libsdl1.2-dev \
+            libssl-dev \
+            libxml2 \
+            libxml2-utils \
+            lzop \
+            pngcrush \
+            rsync \
+            schedtool \
+            squashfs-tools \
+            xsltproc \
+            zip \
+            zlib1g-dev \
+            python3 \
+            clang \
+            lld \
+            llvm \
+            jq
+
+      # ---------------------------------------------------------
+      # Clang Cache
+      # ---------------------------------------------------------
 
       - name: Get Cache Week
         id: cacheweek
         if: inputs.clang_variant != 'neutron'
-        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Clang Toolchain
         if: inputs.clang_variant != 'neutron'
@@ -210,22 +363,49 @@ jobs:
           path: ~/toolchains/${{ inputs.clang_variant }}-clang
           key: clang-${{ inputs.clang_variant }}-${{ steps.cacheweek.outputs.week }}
 
+      # ---------------------------------------------------------
+      # Setup Clang
+      # ---------------------------------------------------------
+
       - name: Setup Clang
         run: |
-          bash builder/scripts/setup_clang.sh ${{ inputs.clang_variant }}
+          bash builder/scripts/setup_clang.sh \
+            "${{ inputs.clang_variant }}"
+
+      # ---------------------------------------------------------
+      # AnyKernel3
+      # ---------------------------------------------------------
 
       - name: Setup AnyKernel3
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-          cp kernel-source/anykernel/anykernel.sh anykernel/anykernel.sh
-          cp -r kernel-source/anykernel/tools/* anykernel/tools/
+          git clone \
+            --depth=1 \
+            https://github.com/osm0sis/AnyKernel3.git \
+            anykernel
+
+          cp \
+            kernel-source/anykernel/anykernel.sh \
+            anykernel/anykernel.sh
+
+          cp -r \
+            kernel-source/anykernel/tools/* \
+            anykernel/tools/
+
+      # ---------------------------------------------------------
+      # Scout
+      # ---------------------------------------------------------
 
       - name: Scout Checkpoint
         env:
           ROOT: ${{ env.ACTUAL_ROOT }}
           VARIANT: ${{ inputs.variant }}
           RUN_MODE: ${{ inputs.run_mode }}
-        run: bash builder/scripts/scout.sh
+        run: |
+          bash builder/scripts/scout.sh
+
+      # ---------------------------------------------------------
+      # ThinLTO Cache
+      # ---------------------------------------------------------
 
       - name: Cache LTO Linker Cache
         if: inputs.lto == 'thin'
@@ -234,36 +414,59 @@ jobs:
           path: /dev/shm/ldcache
           key: ldcache-${{ inputs.clang_variant }}-${{ inputs.lto }}
 
+      # ---------------------------------------------------------
+      # Build
+      # ---------------------------------------------------------
+
       - name: Build Kernel
         env:
           INPUT_HZ: ${{ inputs.hz }}
           INPUT_VARIANT: ${{ inputs.variant }}
           INPUT_ROOT: ${{ inputs.root }}
           INPUT_LTO: ${{ inputs.lto }}
+
+          # Baseline daily-driver configuration
           INPUT_HARDENED: "off"
-          INPUT_HTSR: "on"
-          INPUT_WIFI: "on"
-          INPUT_KGSL: "on"
-          INPUT_DATA: "on"
+          INPUT_HTSR: "off"
+          INPUT_WIFI: "off"
+          INPUT_KGSL: "off"
+          INPUT_DATA: "off"
+
           INPUT_BYPASS: ${{ inputs.bypasscharging && 'on' || 'off' }}
           INPUT_DROIDSPACES: ${{ inputs.droidspaces && 'on' || 'off' }}
           INPUT_DEBUG: ${{ inputs.debug && 'on' || 'off' }}
+
           INPUT_KERNEL_NAME: ${{ inputs.kernel_name }}
           INPUT_SPOOF_UNAME: ${{ inputs.spoof_uname && 'on' || 'off' }}
           INPUT_VERSION_SPOOF: ${{ inputs.kernel_version_spoof }}
           INPUT_NOMOUNT: ${{ inputs.nomount && 'on' || 'off' }}
           INPUT_KASUMI: ${{ inputs.kasumi && 'on' || 'off' }}
+
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
         run: |
+          echo "========================================"
+          echo "Starting NVT Onyx Kernel Build"
+          echo "========================================"
+
           bash builder/scripts/build.sh
+
+      # ---------------------------------------------------------
+      # LTO Output
+      # ---------------------------------------------------------
 
       - name: Set LTO Output
         id: lto_output
-        run: echo "lto_actual=${{ env.LTO_ACTUAL }}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "lto_actual=${LTO_ACTUAL}" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------
+      # Upload
+      # ---------------------------------------------------------
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DumpC2J-${{ env.BUILD_NAME }}
+          name: NVT-Onyx-${{ env.BUILD_NAME }}
           path: kernel-source/DumpC2J-Release
           retention-days: 7
