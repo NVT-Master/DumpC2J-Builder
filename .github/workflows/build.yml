@@ -186,7 +186,7 @@ jobs:
 
           # Daily-driver baseline:
           # exploit / bypass flags OFF
-          INPUT_HARDENED: "off"
+          INPUT_HARDENED: "on"
           INPUT_HTSR: "off"
           INPUT_WIFI: "off"
           INPUT_KGSL: "off"
@@ -426,7 +426,7 @@ jobs:
           INPUT_LTO: ${{ inputs.lto }}
 
           # Baseline daily-driver configuration
-          INPUT_HARDENED: "off"
+          INPUT_HARDENED: "on"
           INPUT_HTSR: "off"
           INPUT_WIFI: "off"
           INPUT_KGSL: "off"
